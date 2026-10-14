@@ -15,6 +15,10 @@ on:
         description: 'Build single version (empty = all)'
         required: false
         type: string
+      blutter-commit:
+        description: 'Override blutter commit (empty = auto: 3.13.x->c1caafe, else->528acbe)'
+        required: false
+        type: string
       ndk-version:
         description: 'Android NDK version'
         required: false
@@ -149,6 +153,9 @@ jobs:
 
 
       - name: Build dartvm.so (static capstone)
+        env:
+          # empty = auto version map; filled = force override (script reads $BLUTTER_COMMIT)
+          BLUTTER_COMMIT: ${{ inputs.blutter-commit }}
         run: |
           mkdir -p output
           bash fler-dart/scripts/build-dartvm.sh \
