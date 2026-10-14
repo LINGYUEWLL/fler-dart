@@ -563,45 +563,96 @@ fi
 
 # ═══════════════════════════════════════════════
 # Step 2b: Version-specific defines
+# Ported from blutter official find_compat_macro() (blutter.py, 528acbe):
+# probe the ACTUAL Dart SDK headers (checked out by dartvm_fetch_build.py
+# in Step 2) instead of hardcoding version boundaries. This is exactly
+# what blutter does on the host, so the defines are aligned by
+# construction. Falls back to version heuristics only if headers are
+# missing (should never happen on a successful Step 2).
 # ═══════════════════════════════════════════════
 VER_MAJOR=$(echo "$DART_VERSION" | cut -d. -f1)
 VER_MINOR=$(echo "$DART_VERSION" | cut -d. -f2)
 
+DARTSDK_VM_DIR="$BLUTTER_DIR/dartsdk/v$DART_VERSION/runtime/vm"
+HAVE_SDK_HEADERS=0
+if [ -f "$DARTSDK_VM_DIR/class_id.h" ]; then
+    HAVE_SDK_HEADERS=1
+    echo "Step 2b mode: probe SDK headers at $DARTSDK_VM_DIR"
+else
+    echo "WARNING: Dart SDK headers not found at $DARTSDK_VM_DIR"
+    echo "         falling back to static version heuristics (legacy path)"
+fi
+
+probe() {
+    # probe <header-file> <fixed-string> -> returns 0 if needle found
+    grep -qF -- "$2" "$DARTSDK_VM_DIR/$1" 2>/dev/null
+}
+
 VERSION_DEFINES=""
-# OLD_MAP_SET_NAME: Dart 2.x only (e.g. 2.18.6) use the pre-refactor Map/Set layout.
-# (Map/Set are not dart::VM classes; kMapCid/kSetCid absent from object.h).
-# All 3.x (including 3.2.3) already have proper Map/Set VM classes.
-if [ "$VER_MAJOR" -lt 3 ]; then
-    VERSION_DEFINES="$VERSION_DEFINES -DOLD_MAP_SET_NAME=ON"
-fi
-# HAS_TYPE_REF: the SDK still ships dart::TypeRef, and TypeParameter uses
-# .bound (not .owner). TypeRef was removed in Dart 3.1.0 (blutter commit
-# 1409ce38 "Quick and incomplete fix for Dart 3.1.0 (remove TypeRef)"), so
-# this must be ON for ALL 2.x AND for 3.0.x.
-# Wrongly leaving it OFF for 3.0.x makes DartTypes.cpp take the #else branch
-# and fail with: no member named 'owner' in 'dart::UntaggedTypeParameter'.
-if [ "$VER_MAJOR" -lt 3 ] || { [ "$VER_MAJOR" -eq 3 ] && [ "$VER_MINOR" -lt 1 ]; }; then
-    VERSION_DEFINES="$VERSION_DEFINES -DHAS_TYPE_REF=ON"
-fi
-# HAS_SHARED_CLASS_TABLE: use ig->shared_class_table() instead of ClassTable.
-# Dart 2.x exposes GetUnboxedFieldsMapAt() only on SharedClassTable (not on
-# ClassTable); 3.x has it on ClassTable so it keeps the default #else path.
-if [ "$VER_MAJOR" -lt 3 ]; then
-    VERSION_DEFINES="$VERSION_DEFINES -DHAS_SHARED_CLASS_TABLE=ON"
-fi
-if [ "$VER_MAJOR" -ge 3 ]; then
-    VERSION_DEFINES="$VERSION_DEFINES -DHAS_RECORD_TYPE=ON"
-fi
-if [ "$VER_MAJOR" -ge 3 ] && [ "$VER_MINOR" -ge 6 ]; then
-    VERSION_DEFINES="$VERSION_DEFINES -DUNIFORM_INTEGER_ACCESS=ON"
-    VERSION_DEFINES="$VERSION_DEFINES -DNO_METHOD_EXTRACTOR_STUB=ON"
-fi
-# NO_INIT_LATE_STATIC_FIELD: only for SDKs WITHOUT a separate
-# InitLateStaticFieldStub enumerator (pch.h maps it onto InitStaticFieldStub).
-# 2.16+ and all 3.x DO have the split, so this must NOT be set for them
-# (defining it for 2.18.6 causes a StubKind enumerator redefinition).
-if [ "$VER_MAJOR" -eq 2 ] && [ "$VER_MINOR" -lt 16 ]; then
-    VERSION_DEFINES="$VERSION_DEFINES -DNO_INIT_LATE_STATIC_FIELD=ON"
+if [ "$HAVE_SDK_HEADERS" = "1" ]; then
+    # ── class_id.h probes (blutter.py find_compat_macro) ──
+    # Rename of default Map/Set impl classes (old layout, pre-refactor SDKs)
+    if probe class_id.h 'V(LinkedHashMap)'; then
+        VERSION_DEFINES="$VERSION_DEFINES -DOLD_MAP_SET_NAME=ON"
+        if ! probe class_id.h 'V(ImmutableLinkedHashMap)'; then
+            VERSION_DEFINES="$VERSION_DEFINES -DOLD_MAP_NO_IMMUTABLE=ON"
+        fi
+    fi
+    # kLastInternalOnlyCid removed from class id enum in newer SDKs
+    if ! probe class_id.h ' kLastInternalOnlyCid '; then
+        VERSION_DEFINES="$VERSION_DEFINES -DNO_LAST_INTERNAL_ONLY_CID=ON"
+    fi
+    # TypeRef still exists (removed in Dart 3.1.0 upstream)
+    if probe class_id.h 'V(TypeRef)'; then
+        VERSION_DEFINES="$VERSION_DEFINES -DHAS_TYPE_REF=ON"
+    fi
+    # RecordType: official only trusts it on 3.x (incomplete in 2.19)
+    if [ "$VER_MAJOR" = "3" ] && probe class_id.h 'V(RecordType)'; then
+        VERSION_DEFINES="$VERSION_DEFINES -DHAS_RECORD_TYPE=ON"
+    fi
+    # ── class_table.h probe ──
+    # ClassTable/SharedClassTable not yet merged back together
+    if probe class_table.h 'class SharedClassTable {'; then
+        VERSION_DEFINES="$VERSION_DEFINES -DHAS_SHARED_CLASS_TABLE=ON"
+    fi
+    # ── stub_code_list.h probe ──
+    # separate InitLateStaticField stub exists in 2.16+ and all 3.x
+    if ! probe stub_code_list.h 'V(InitLateStaticField)'; then
+        VERSION_DEFINES="$VERSION_DEFINES -DNO_INIT_LATE_STATIC_FIELD=ON"
+    fi
+    # ── object_store.h probe ──
+    # build_generic_method_extractor_code removed by "Simplify and
+    # optimize method extractors" — happened in Dart 3.4.0 (NOT 3.6 as
+    # the previous static boundary assumed; caused 3.4.x build failures)
+    if ! probe object_store.h 'build_generic_method_extractor_code)'; then
+        VERSION_DEFINES="$VERSION_DEFINES -DNO_METHOD_EXTRACTOR_STUB=ON"
+    fi
+    # ── object.h probe ──
+    # Integer value access refactored to Value() (Dart 3.6+)
+    if ! probe object.h 'AsTruncatedInt64Value()'; then
+        VERSION_DEFINES="$VERSION_DEFINES -DUNIFORM_INTEGER_ACCESS=ON"
+    fi
+else
+    # ── legacy static heuristics (kept as fallback) ──
+    if [ "$VER_MAJOR" -lt 3 ]; then
+        VERSION_DEFINES="$VERSION_DEFINES -DOLD_MAP_SET_NAME=ON"
+        VERSION_DEFINES="$VERSION_DEFINES -DHAS_SHARED_CLASS_TABLE=ON"
+    fi
+    if [ "$VER_MAJOR" -lt 3 ] || { [ "$VER_MAJOR" -eq 3 ] && [ "$VER_MINOR" -lt 1 ]; }; then
+        VERSION_DEFINES="$VERSION_DEFINES -DHAS_TYPE_REF=ON"
+    fi
+    if [ "$VER_MAJOR" -ge 3 ]; then
+        VERSION_DEFINES="$VERSION_DEFINES -DHAS_RECORD_TYPE=ON"
+    fi
+    if [ "$VER_MAJOR" -ge 3 ] && [ "$VER_MINOR" -ge 4 ]; then
+        VERSION_DEFINES="$VERSION_DEFINES -DNO_METHOD_EXTRACTOR_STUB=ON"
+    fi
+    if [ "$VER_MAJOR" -ge 3 ] && [ "$VER_MINOR" -ge 6 ]; then
+        VERSION_DEFINES="$VERSION_DEFINES -DUNIFORM_INTEGER_ACCESS=ON"
+    fi
+    if [ "$VER_MAJOR" -eq 2 ] && [ "$VER_MINOR" -lt 16 ]; then
+        VERSION_DEFINES="$VERSION_DEFINES -DNO_INIT_LATE_STATIC_FIELD=ON"
+    fi
 fi
 echo "Version defines: $VERSION_DEFINES"
 
