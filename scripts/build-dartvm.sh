@@ -17,82 +17,82 @@
 # 零引擎依赖）。如需旧的动态模式用 --dynamic-capstone。
 #
 # Shared libraries (built once, reused across all Dart versions):
-; shift ;;
-libicudata.so — ICU 数据表
-libc++_shared.so — NDK C++ 标准库
+#   libicuuc.so      — ICU Unicode library
+#   libicudata.so    — ICU data tables
+#   libc++_shared.so — NDK C++ standard library
 #
-用法（引擎构建 - 每 Dart 版本）：
-bash build-dartvm.sh --dart-version 3.12.1
+# Usage (engine build — per Dart version):
+#   bash build-dartvm.sh --dart-version 3.12.1
 #
-用法（共享库构建 - 一次）：
-bash 构建 Dart VM 脚本，仅构建共享库
+# Usage (shared libs build — once):
+#   bash build-dartvm.sh --build-shared-libs-only
 
-设置 -euopipefail
+set -euo pipefail
 
 DART_VERSION=""
 NDK_PATH="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
-OUTPUT_DIR="$(cd"$(dirname"$0")/.."&& pwd/output"
-REPO_DIR="$(cd"dirname"$0")/.."&& pwd"
+OUTPUT_DIR="$(cd "$(dirname "$0")/.." && pwd)/output"
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_ROOT=""
 JOBS=$(nproc 2>/dev/null || echo 4)
 BLUTTER_REPO="https://github.com/worawit/blutter.git"
-固定 blutter commit：528acbe 为 Debug Repro 宿主实测可正常分析 Dart 3.12.1 的版本
-（详见 dev-progress 引擎根因排查）。不随上游漂移，保证引擎与宿主行为一致。
-该 commit 无需任何 fler-dart 补丁（Step 1b / patch-elfhelper 已移除）。
+# 固定 blutter commit：4a60ac6 (2026-08-18) 支持 Dart 3.10/3.11/3.12 且重构 stub 列表以适配 Dart 3.13
+# （详见 dev-progress 引擎根因排查）。不随上游漂移，保证引擎与宿主行为一致。
+# 该 commit 无需任何 fler-dart 补丁（Step 1b / patch-elfhelper 已移除）。
 BLUTTER_COMMIT="4a60ac648bf448c5a7596437243bcd0b9376fdf0"
-默认静态 capstone：dartvm.so 自带 Capstone，引擎包不再产 libcapstone.so
-（capstone 已静态进 fler APK）。--dynamic-capstone 可切回旧动态模式。
+# 默认静态 capstone：dartvm.so 自带 Capstone，引擎包不再产 libcapstone.so
+# （capstone 已静态进 fler APK）。--dynamic-capstone 可切回旧动态模式。
 USE_SHARED_CAPSTONE="OFF"
 BUILD_SHARED_LIBS_ONLY="0"
 PREBUILT_SHARED_LIBS_DIR=""
 
 while [[ $# -gt 0 ]]; do
-case$1 在
-        --dart-version) DART_VERSION="$2"；移位2 ;;
-        --ndk-path) NDK_PATH="$2"；移位2 ;;
-        --output-dir) OUTPUT_DIR="$2"移位2 ;;
-        --jobs) JOBS="$2"移位2 ;;
-        --build-root) BUILD_ROOT="$2"移位2 ;;
-        --static-capstone) USE_SHARED_CAPSTONE="OFF"移位；
-        --dynamic-capstone) USE_SHARED_CAPSTONE="ON"移位；
-        --build-shared-libs-only) BUILD_SHARED_LIBS_ONLY="1"移位；
-        --prebuilt-shared-libs-dir) PREBUILT_SHARED_LIBS_DIR="$2"shift2 ;;
-*) echo"ERROR: Unknown$1"; exit 1 ;;
+    case $1 in
+        --dart-version) DART_VERSION="$2"; shift 2 ;;
+        --ndk-path) NDK_PATH="$2"; shift 2 ;;
+        --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
+        --jobs) JOBS="$2"; shift 2 ;;
+        --build-root) BUILD_ROOT="$2"; shift 2 ;;
+        --static-capstone) USE_SHARED_CAPSTONE="OFF"; shift ;;
+        --dynamic-capstone) USE_SHARED_CAPSTONE="ON"; shift ;;
+        --build-shared-libs-only) BUILD_SHARED_LIBS_ONLY="1"; shift ;;
+        --prebuilt-shared-libs-dir) PREBUILT_SHARED_LIBS_DIR="$2"; shift 2 ;;
+        *) echo "ERROR: Unknown $1"; exit 1 ;;
     esac
 done
 
-if [ -z "$DART_VERSION"] && ["BUILD_SHARED_LIBS_ONLY" != "1" ]; 然后
-echo"ERROR: --dart-version required (或使用 --build-shared-libs-only)"
+if [ -z "$DART_VERSION" ] && [ "$BUILD_SHARED_LIBS_ONLY" != "1" ]; then
+    echo "ERROR: --dart-version required (or use --build-shared-libs-only)"
     exit 1
 fi
-if[ !-d "$NDK_PATH" ]; then
-echo错误：NDK 未找到$NDK_PATH"; exit 1
+if [ ! -d "$NDK_PATH" ]; then
+    echo "ERROR: NDK not found at $NDK_PATH"; exit 1
 fi
 
-如果 [ -z "则" ]; 创建临时目录
+if [ -z "$BUILD_ROOT" ]; then
     BUILD_ROOT="$(mktemp -d -t fler-dart-build-XXXXXX)"
     CLEANUP=1
 else
-mkdir-p "$BUILD_ROOT"
+    mkdir -p "$BUILD_ROOT"
     CLEANUP=0
 fi
 
-TOOLCHAIN_FILE="NDK_PATH/build/cmake/android.toolchain.cmake"
-如果[ !-f "工具链文件" ]; 那么
-echo错误：未找到 NDK 工具链$TOOLCHAIN_FILE"; exit 1
+TOOLCHAIN_FILE="$NDK_PATH/build/cmake/android.toolchain.cmake"
+if [ ! -f "$TOOLCHAIN_FILE" ]; then
+    echo "ERROR: NDK toolchain not found at $TOOLCHAIN_FILE"; exit 1
 fi
 
-BLUTTER_DIR="构建根目录/blutter"
-CAPSTONE_BUILD_DIR="构建根目录/capstone_build"
-DARTVM_SO_BUILD_DIR="构建根目录/dartvm_so_build"
-SQLITE_DIR="构建根目录/sqlite"
+BLUTTER_DIR="$BUILD_ROOT/blutter"
+CAPSTONE_BUILD_DIR="$BUILD_ROOT/capstone_build"
+DARTVM_SO_BUILD_DIR="$BUILD_ROOT/dartvm_so_build"
+SQLITE_DIR="$BUILD_ROOT/sqlite"
 ARCH_TAG="android_arm64"
 
-共享库输出（已构建一次，复用）
+# Shared libs output (built once, reused)
 SHARED_LIBS_OUT="$OUTPUT_DIR/shared_libs"
-mkdir-p "$SHARED_LIBS_OUT"
+mkdir -p "$SHARED_LIBS_OUT"
 
-# 如果 --build-shared-libs-only 参数存在，则构建共享库并退出
+# If --build-shared-libs-only, build shared libs and exit
 if [ "$BUILD_SHARED_LIBS_ONLY" = "1" ]; then
     echo "════════════════════════════════════════════"
     echo " fler-dart: Building shared libraries only"
