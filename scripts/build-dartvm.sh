@@ -574,9 +574,13 @@ VERSION_DEFINES=""
 if [ "$VER_MAJOR" -lt 3 ]; then
     VERSION_DEFINES="$VERSION_DEFINES -DOLD_MAP_SET_NAME=ON"
 fi
-# HAS_TYPE_REF: the SDK still ships dart::TypeRef (removed later when
-# TypeParameter.bound was replaced by TypeParameter.owner). All 2.x have it.
-if [ "$VER_MAJOR" -lt 3 ]; then
+# HAS_TYPE_REF: the SDK still ships dart::TypeRef, and TypeParameter uses
+# .bound (not .owner). TypeRef was removed in Dart 3.1.0 (blutter commit
+# 1409ce38 "Quick and incomplete fix for Dart 3.1.0 (remove TypeRef)"), so
+# this must be ON for ALL 2.x AND for 3.0.x.
+# Wrongly leaving it OFF for 3.0.x makes DartTypes.cpp take the #else branch
+# and fail with: no member named 'owner' in 'dart::UntaggedTypeParameter'.
+if [ "$VER_MAJOR" -lt 3 ] || { [ "$VER_MAJOR" -eq 3 ] && [ "$VER_MINOR" -lt 1 ]; }; then
     VERSION_DEFINES="$VERSION_DEFINES -DHAS_TYPE_REF=ON"
 fi
 # HAS_SHARED_CLASS_TABLE: use ig->shared_class_table() instead of ClassTable.
