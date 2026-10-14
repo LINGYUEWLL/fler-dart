@@ -36,10 +36,10 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_ROOT=""
 JOBS=$(nproc 2>/dev/null || echo 4)
 BLUTTER_REPO="https://github.com/worawit/blutter.git"
-# 固定 blutter commit：4a60ac6 (2026-08-18) 支持 Dart 3.10/3.11/3.12 且重构 stub 列表以适配 Dart 3.13
+# 固定 blutter commit：c1caafe = PR#213 (Techuouo520/feat/dart-3.13-support)，支持 Dart 3.13 单快照
 # （详见 dev-progress 引擎根因排查）。不随上游漂移，保证引擎与宿主行为一致。
 # 该 commit 无需任何 fler-dart 补丁（Step 1b / patch-elfhelper 已移除）。
-BLUTTER_COMMIT="4a60ac648bf448c5a7596437243bcd0b9376fdf0"
+BLUTTER_COMMIT="c1caafecd233ea17c3f4b6b5ff8847d59478b979"
 # 默认静态 capstone：dartvm.so 自带 Capstone，引擎包不再产 libcapstone.so
 # （capstone 已静态进 fler APK）。--dynamic-capstone 可切回旧动态模式。
 USE_SHARED_CAPSTONE="OFF"
