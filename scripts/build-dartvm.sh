@@ -36,10 +36,33 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_ROOT=""
 JOBS=$(nproc 2>/dev/null || echo 4)
 BLUTTER_REPO="https://github.com/worawit/blutter.git"
-# 固定 blutter commit：c1caafe = PR#213 (Techuouo520/feat/dart-3.13-support)，支持 Dart 3.13 单快照
-# （详见 dev-progress 引擎根因排查）。不随上游漂移，保证引擎与宿主行为一致。
-# 该 commit 无需任何 fler-dart 补丁（Step 1b / patch-elfhelper 已移除）。
-BLUTTER_COMMIT="c1caafecd233ea17c3f4b6b5ff8847d59478b979"
+
+# ─── blutter commit 按 Dart 版本映射 ───
+# blutter 上游 src 会随 Dart SDK 内部 API 变化而变，单一 commit 无法通吃所有版本。
+# 实测结论（云端 host-proven）：
+#   - c1caafe (= PR#213 Techuouo520/feat/dart-3.13-support)：仅支持 Dart 3.13.x
+#       · 已实证：3.13.5 成功
+#       · 已实证：3.0.0 失败（DartTypes.cpp: no member named 'owner' in UntaggedTypeParameter）
+#   - 528acbe83ba35a3a53fb97b231cb5f968c7068d1：宿主实测锚点为 Dart 3.12.1，
+#       但向下兼容良好（已实证 3.3.0 / 3.7.2 / 3.12.1 均成功），
+#       作为「非 3.13」版本的默认兜底 commit。
+#   · 该 commit 无需任何 fler-dart 补丁（Step 1b / patch-elfhelper 已移除）。
+#
+# 覆盖顺序：BLUTTER_COMMIT 环境变量 > --blutter-commit 参数 > 按版本自动映射。
+BLUTTER_COMMIT_OVERRIDE="${BLUTTER_COMMIT:-}"
+
+# 按 Dart 版本挑选 blutter commit（DART_VERSION 解析完成后调用）
+pick_blutter_commit() {
+    local dv="$1"
+    local minor
+    minor="$(echo "$dv" | cut -d. -f2)"
+    case "$dv" in
+        # Dart 3.13.x：需要 PR#213 的 dart-3.13-support 补丁
+        3.13.*) echo "c1caafecd233ea17c3f4b6b5ff8847d59478b979" ;;
+        # 其余版本（含 2.x / 3.0~3.12）：使用向下包容性最好的宿主锚点 commit
+        *)      echo "528acbe83ba35a3a53fb97b231cb5f968c7068d1" ;;
+    esac
+}
 # 默认静态 capstone：dartvm.so 自带 Capstone，引擎包不再产 libcapstone.so
 # （capstone 已静态进 fler APK）。--dynamic-capstone 可切回旧动态模式。
 USE_SHARED_CAPSTONE="OFF"
@@ -57,9 +80,24 @@ while [[ $# -gt 0 ]]; do
         --dynamic-capstone) USE_SHARED_CAPSTONE="ON"; shift ;;
         --build-shared-libs-only) BUILD_SHARED_LIBS_ONLY="1"; shift ;;
         --prebuilt-shared-libs-dir) PREBUILT_SHARED_LIBS_DIR="$2"; shift 2 ;;
+        --blutter-commit) BLUTTER_COMMIT_OVERRIDE="$2"; shift 2 ;;
         *) echo "ERROR: Unknown $1"; exit 1 ;;
     esac
 done
+
+# ─── 解析最终使用的 blutter commit ───
+# 优先级：override（env / --blutter-commit）> 按版本自动映射
+if [ -n "$BLUTTER_COMMIT_OVERRIDE" ]; then
+    BLUTTER_COMMIT="$BLUTTER_COMMIT_OVERRIDE"
+    BLUTTER_COMMIT_SRC="override"
+elif [ -n "$DART_VERSION" ]; then
+    BLUTTER_COMMIT="$(pick_blutter_commit "$DART_VERSION")"
+    BLUTTER_COMMIT_SRC="auto(version-map)"
+else
+    # --build-shared-libs-only 模式：不需要 blutter，给个占位避免 set -u 报错
+    BLUTTER_COMMIT="528acbe83ba35a3a53fb97b231cb5f968c7068d1"
+    BLUTTER_COMMIT_SRC="default"
+fi
 
 if [ -z "$DART_VERSION" ] && [ "$BUILD_SHARED_LIBS_ONLY" != "1" ]; then
     echo "ERROR: --dart-version required (or use --build-shared-libs-only)"
@@ -262,6 +300,7 @@ trap cleanup EXIT
 echo "════════════════════════════════════════════"
 echo " fler-dart: dartvm.so Build (dartvm_fetch_build.py + NDK)"
 echo " Dart version: $DART_VERSION"
+echo " Blutter:      $BLUTTER_COMMIT  [$BLUTTER_COMMIT_SRC]"
 echo " NDK:          $NDK_PATH"
 echo " Build root:   $BUILD_ROOT"
 echo "════════════════════════════════════════════"
